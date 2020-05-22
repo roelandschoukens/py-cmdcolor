@@ -45,7 +45,8 @@ class Color:
      - setting the bright flag;
      - resetting the style.
     
-    Color is immutable, all operators return new objects.
+    Color is immutable, all operators return new objects. The color IDs
+    follow Windows convention: 1 is blue and 4 is red.
     
     The add operator is supported, where a + b is equivalent to
     'apply a, then b'
@@ -370,17 +371,14 @@ else:
                 return
                 
             if color.flag: 
-                # only bright for now.
+                # map "bright" to the bold attribute
                 _print_el(f, _colbold)
             
             if color.fg is not None:
                 fg = color.fg
                 ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
                 if fg >= C_BRIGHT_FLAG:
-                    if _cols < 16:
-                        _print_el(f, _colbold)
-                    else:
-                        ansiC += C_BRIGHT_FLAG
+                    _print_el(f, _colbold)
                 
                 _print_el(f, _cu.tparm(_afstr, ansiC).decode('ascii'))
                 
