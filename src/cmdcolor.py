@@ -506,7 +506,7 @@ if __name__ == "__main__":
     for z in zip(s, c): printc(Color.fg(z[1]), z[0], end="")
     print(" module. Import it into your favorite script to print\ncolors.")
     
-    if not willPrintColor(_sys.stdout):  
+    if not canPrintColor(_sys.stdout):  
         print("Current stdout cannot print colors")
     elif not willPrintColor(_sys.stdout):  
         print("Current stdout will not print colors")
