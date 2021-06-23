@@ -11,9 +11,10 @@ import sys as _sys
 # this script requires Python 3
 
 # switch colors on or off
-C_COLOR_OFF  = 0
-C_COLOR_ON   = 1
-C_COLOR_AUTO = 2
+C_COLOR_OFF  = "off"
+C_COLOR_ON   = "on"
+C_COLOR_AUTO = "auto"
+C_COLOR_OPTION_LIST = (C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO)
 
 _useColorFlag = C_COLOR_AUTO
 
@@ -248,7 +249,7 @@ def enableColorPrinting(flag):
     """
     global _useColorFlag
     if flag not in [C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO]:
-        raise ArgumentError("flag should be C_COLOR_OFF, C_COLOR_ON or C_COLOR_AUTO")
+        raise ArgumentError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
     _useColorFlag = flag
 
 
