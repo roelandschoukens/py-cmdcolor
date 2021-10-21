@@ -54,7 +54,8 @@ class Color:
      - resetting the style.
     
     Color is immutable, all operators return new objects. The color IDs
-    follow Windows convention: 1 is blue and 4 is red.
+    0 to 15 follow Windows convention: 1 is blue and 4 is red. 16 to 255
+    follows ANSI convention.
     
     The add operator is supported, where a + b is equivalent to
     'apply a, then b'
@@ -77,16 +78,13 @@ class Color:
     def bg(color, intensity=None):
         """ create color with given background color (given as integer) """
         return Color.make(None, Color._val(color, intensity))
-
-    def flag(s):
-        """ return the C_BRIGHT_FLAG flag, if set. """
-        c = Color()
-        c.flag = s
-        return c
         
-    # forms: Color() -> reset
-    # forms: Color(color) -> copy another color object
     def __init__(self, color=None):
+        """ Make empty object or make a copy
+
+        Color(): create a color which resets to the default
+        Color(color): copy a color object
+        """
         # foreground color, if set
         self.fg = None
         # background color, if set
@@ -143,7 +141,7 @@ class Color:
             if intensity:
                 a = a | C_BRIGHT_FLAG
             elif intensity is not None:
-                a = a % 8
+                a = a & ~C_BRIGHT_FLAG
         return a        
         
     def _apply_flags(self):
@@ -186,8 +184,8 @@ class Color:
 
     # repr(self)
     def __repr__(self):
-        # bright text: (implies no explicit foreground color)
-        if self.flag == C_BRIGHT_FLAG: return  'Color(None, {}, bright)'.format(self.bg)
+        # with flag:
+        if self.flag == C_BRIGHT_FLAG: return  'Color({}, {}, C_BRIGHT_FLAG)'.format(self.fg, self.bg)
         # regular color, or None
         return 'Color({}, {})'.format(self.fg, self.bg)
 
@@ -195,17 +193,18 @@ class Color:
     def __str__(self):
         # reset:
         if not self:
-            return "Reset"
+            return '[reset]'
         
-        s = ""
+        s = ''
+        if self.flag:
+            s += 'bright'
         if self.fg:
+            if s: s += ' '
             s += _color_to_str(self.fg)
-        elif self.flag:
-            s += "bright"
         if self.bg:
-            if len(s) > 0: s += ", "
-            s += _color_to_str(self.bg) + " background"
-        return s
+            if s: s += ', '
+            s += _color_to_str(self.bg) + ' background'
+        return '[' + s + ']'
 
     # hash(self)
     def __hash__(self):
@@ -235,7 +234,7 @@ C_YELLOW  = Color.fg(6)
 C_WHITE   = Color.fg(7)
 
 """ special value which turns on "bright" (also called "bold") """
-C_BRIGHT  = Color.flag(C_BRIGHT_FLAG)
+C_BRIGHT  = Color.make(None, None, C_BRIGHT_FLAG)
 
 C_BG_BLACK   = Color.bg(0)
 C_BG_BLUE    = Color.bg(1)
@@ -256,8 +255,8 @@ def enableColorPrinting(flag):
         C_COLOR_AUTO (default): only output color if the file handle appears to be a console.
     """
     global _useColorFlag
-    if flag not in [C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO]:
-        raise ArgumentError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
+    if flag not in C_COLOR_OPTION_LIST:
+        raise ValueError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
     _useColorFlag = flag
 
 
