@@ -15,7 +15,8 @@ import warnings as _warnings
 C_COLOR_OFF  = "off"
 C_COLOR_ON   = "on"
 C_COLOR_AUTO = "auto"
-C_COLOR_OPTION_LIST = (C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO)
+C_COLOR_ANSI = "ansi"
+C_COLOR_OPTION_LIST = (C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO, C_COLOR_ANSI)
 
 _useColorFlag = C_COLOR_AUTO
 
@@ -250,14 +251,21 @@ def enableColorPrinting(flag):
     """Enables or disables color output.
     
     flag may be:
-        C_COLOR_OFF: Unconditionally switch off color output
-        C_COLOR_ON: Always try to output color if possible on this platform
-        C_COLOR_AUTO (default): only output color if the file handle appears to be a console.
+
+       - C_COLOR_OFF: switch off color output
+       - C_COLOR_ON: always try to output color if possible on this platform
+       - C_COLOR_AUTO (default): only output color if the file handle appears to be a console.
+       - C_COLOR_ANSI: always output ANSI sequences (on Windows this switches to outputting ANSI)
     """
     global _useColorFlag
     if flag not in C_COLOR_OPTION_LIST:
         raise ValueError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
-    _useColorFlag = flag
+    if flag == C_COLOR_ANSI:
+        _useColorFlag = C_COLOR_ON
+        _use_ansi_fallback()
+        _need_flush = False        
+    else:
+        _useColorFlag = flag
 
 
 def _set_color_raw_ansi(color, f):
@@ -331,6 +339,17 @@ def _reduce_16(n):
     
     
     return col
+
+
+def _use_ansi_fallback():
+    """ Switch to ANSI printing. (can't undo this) """
+    global _colors, _can_use, _print_el, _set_color
+
+    _colors = lambda file : 256
+    _can_use = lambda file: True
+    _print_el = lambda file, s: print(file=file, end=s)
+    _set_color = _set_color_raw_ansi
+
 
 if _sys.platform == 'win32':
 
@@ -501,18 +520,9 @@ else:
                     ansiC = bg
                 _print_el(f, _cu.tparm(_abstr, ansiC).decode('ascii'))
 
-
     except ImportError:
         # no curses available. Assume the usual ANSI codes will work
-
-        def _can_use(file):
-            return True
-
-        def _colors(_):
-            return 16
-
-        #use ANSI escape codes
-        _set_color = _set_color_raw_ansi
+        _use_ansi_fallback()
         
     _need_flush = False
 
@@ -599,6 +609,9 @@ if __name__ == "__main__":
 
     if "--force" in _sys.argv:
         enableColorPrinting(C_COLOR_ON)
+    
+    if "--ansi" in _sys.argv:
+        enableColorPrinting(C_COLOR_ANSI)
     
     print("This is the ", end="")
     s = "«cmdcolor»"
