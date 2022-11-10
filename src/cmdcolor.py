@@ -527,12 +527,12 @@ else:
     _need_flush = False
 
         
-def canPrintColor(file):
+def canPrintColor(file=_sys.stdout):
     """ Return True if printc is able to attempt to print colored text. """
     return _can_use(file)
     
         
-def numColors(file):
+def numColors(file=_sys.stdout):
     """ Number of colors we can print on this file.
 
     this may return 1, 8, 16 or 256 """
@@ -541,7 +541,7 @@ def numColors(file):
     return _colors(file)
     
         
-def willPrintColor(file):
+def willPrintColor(file=_sys.stdout):
     """ Return True if printc will attempt to print colored text to this file.
     
     This depends on the setting supplied with enableColorPrinting() """
