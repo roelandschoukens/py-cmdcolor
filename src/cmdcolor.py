@@ -79,7 +79,23 @@ class Color:
     def bg(color, intensity=None):
         """ create color with given background color (given as integer) """
         return Color.make(None, Color._val(color, intensity))
-        
+
+    def fg6(r, g, b, intensity=None):
+        """ create color with given 6-level RGB values (0−5) """
+        r, g, b = int(r), int(g), int(b)
+        if (max(r, g, b) > 5 or min(r, g, b) < 0):
+            raise ValueError("RGB value out of range")
+        color = 16 + b + 6*(g + 6*r)
+        return Color.make(Color._val(color, intensity), None)
+
+    def bg6(r, g, b, intensity=None):
+        """ create color with given 6-level RGB values (0−5) as background color """
+        r, g, b = int(r), int(g), int(b)
+        if (max(r, g, b) > 5 or min(r, g, b) < 0):
+            raise ValueError("RGB value out of range")
+        color = 16 + b + 6*(g + 6*r)
+        return Color.make(None, Color._val(color, intensity))
+
     def __init__(self, color=None):
         """ Make empty object or make a copy
 
@@ -209,7 +225,7 @@ class Color:
 
     # hash(self)
     def __hash__(self):
-        return self.fg + self.bg * 16 + self.flag * 256
+        return hash(self.fg, self.bg, self.flag)
 
     # a == b
     def __eq__(a, b):
@@ -343,8 +359,9 @@ def _reduce_16(n):
 
 def _use_ansi_fallback():
     """ Switch to ANSI printing. (can't undo this) """
-    global _colors, _can_use, _print_el, _set_color
+    global _colorMode, _colors, _can_use, _print_el, _set_color
 
+    _colorMode = lambda file : "ANSI"
     _colors = lambda file : 256
     _can_use = lambda file: True
     _print_el = lambda file, s: print(file=file, end=s)
@@ -398,6 +415,7 @@ if _sys.platform == 'win32':
     # get our data for any handle which is a console
     class _Con:
         def __init__(self, std_h):
+            global _colorMode
             self.h = _ctypes.windll.kernel32.GetStdHandle(std_h)
             self.default = _get_color(self.h)
             self.use_ansi = False
@@ -429,6 +447,10 @@ if _sys.platform == 'win32':
     def _colors(file):
         c = _con.get(file)
         return 1 if c is None else (256 if c.use_ansi else 16)
+
+    def _colorMode(file):
+        c = _con.get(file)
+        return "None" if c is None else ("ANSI" if c.use_ansi else "win32")
 
     def _can_use(file):
         # if the Console API is not available, our custom printing doesn't work at all
@@ -478,12 +500,14 @@ else:
         _colbold = _cu.tigetstr("bold").decode('ascii')
         _colreset =  _cu.tigetstr("sgr0").decode('ascii')
 
-
         def _can_use(file):
             return _cols and _cols >= 8
 
         def _colors(file):
             return min(256, _cols)
+
+        def _colorMode(file):
+            return "Curses" if _cols >= 8 else "None"
 
         def _set_color(color, f):
             if not color: 
@@ -539,8 +563,13 @@ def numColors(file=_sys.stdout):
     if not _can_use(file):
         return 1
     return _colors(file)
-    
-        
+
+
+def colorMode(file=_sys.stdout):
+    """ Color mode used """
+    return _colorMode(file)
+
+
 def willPrintColor(file=_sys.stdout):
     """ Return True if printc will attempt to print colored text to this file.
     
@@ -613,26 +642,72 @@ if __name__ == "__main__":
     if "--ansi" in _sys.argv:
         enableColorPrinting(C_COLOR_ANSI)
     
-    print("This is the ", end="")
+    do_info = "--help" in _sys.argv or "--info" in _sys.argv or "-h" in _sys.argv
+    
+    def ramp(x):
+        x = x % 30
+        if x < 5:
+            return 5
+        elif x < 10:
+            return 10 - x
+        elif x < 20:
+            return 0
+        elif x < 25:
+            return x - 20
+        else:
+            return 5
+    
+    def rainbow(i):
+        if numColors() >= 256:
+            r = ramp(i // 2)
+            g = ramp(i // 2 - 10)
+            b = ramp(i // 2 - 20)
+            return Color.fg6(r, g, b)
+        return C_RESET
+    
+    rowI = 0
+    printc(rainbow(0), "╔", end='')
+    for i in range(1, 77):
+        printc(rainbow(i), "═", end='')
+    printc(rainbow(78), "╗")
+    
+    rowI += 2
+    printc(rainbow(rowI),  "║", C_RESET,"  This is the ", end="")
     s = "«cmdcolor»"
     cl = [4, 12, 12, 14, 14, 10, 10, 11, 9, 1]
     for ch, c in zip(s, cl): printc(Color.fg(c), ch, end="")
-    print(" module. Import it into your favorite script to print\ncolors.")
-    
+    printc(" module. Import it into your favorite script to   ", rainbow(78+rowI), "║")
+    rowI += 2
+    printc(rainbow(rowI), "║", C_RESET, "  print colors.", " "*58, rainbow(78+rowI), "║")
+
+    if do_info:
+        rowI += 2
+        printc(rainbow(rowI), "║", C_RESET, "  {:72s}".format("") , rainbow(78+rowI), "║")
+        rowI += 2
+        printc(rainbow(rowI), "║", C_RESET, "  {:72s}".format("Status:") , rainbow(78+rowI), "║")
+        rowI += 2
+        s = " - stdout: " + (str(numColors(_sys.stdout)) + " colors ("+ colorMode(_sys.stdout) +")" if willPrintColor(_sys.stdout) else "no colors")
+        printc(rainbow(rowI), "║", C_RESET, "  {:72s}".format(s) , rainbow(78+rowI), "║")
+        rowI += 2
+        s = " - stderr: " + (str(numColors(_sys.stderr)) + " colors ("+ colorMode(_sys.stderr) +")" if willPrintColor(_sys.stderr) else "no colors")
+        printc(rainbow(rowI), "║", C_RESET, "  {:72s}".format(s) , rainbow(78+rowI), "║")
+ 
+    rowI += 2
+    printc(rainbow(rowI), "╚", end='')
+    for i in range(1, 77):
+        printc(rainbow(i+rowI), "═", end='')
+    printc(rainbow(78+rowI), "╝")
+
     if not canPrintColor(_sys.stdout):  
         print("Current stdout cannot print colors")
     elif not willPrintColor(_sys.stdout):  
         print("Current stdout will not print colors")
     
-    if "--help" in _sys.argv or "--info" in _sys.argv or "-h" in _sys.argv:
+    if do_info:
         print()
         printc("You can display a color chart by using the", C_BRIGHT, "--chart", C_RESET, "option.")
         printc("In 256 color mode use", C_BRIGHT, "--chart256", C_RESET, "or", C_BRIGHT, "--chart256bg", C_RESET, end=".\n")
         printc("Use", C_BRIGHT, "--force", C_RESET, "to always try to print color.")
-        printc()
-        printc("Status:")
-        printc("   stdout:", str(numColors(_sys.stdout)) + " colors" if willPrintColor(_sys.stdout) else "no colors")
-        printc("   stderr:", str(numColors(_sys.stderr)) + " colors" if willPrintColor(_sys.stderr) else "no colors")
     
     elif "--chart" in _sys.argv:
         print()
