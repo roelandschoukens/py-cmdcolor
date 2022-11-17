@@ -3,6 +3,22 @@ This is Roeland’s CMD color module, which abstracts away either the ANSI color
 codes on VT-style terminals, or the win32 console API. The latter is also called
 directly for printing text so you can print any Unicode character up to U+FFFF
 on the console.
+
+The + operator allows creating colors 8 to 15 by adding the bright flag to colors 0 to 7.
+This is because originally we represented RGBI bits on Windows (which inherited
+these from CGA all the way back. This is also how we ended up with blue being color 4).
+Many scripts using ANSI sequences do this as well, they print `'\033[1;31m'`
+for bright blue. In particular, they may assume `'\033[1;30m'` yields visible dark gray.
+They may also ignore the bold attribute on colors 8 to 15.
+
+Terminals therefore often use bright colors if you request bold for colors 0 to 7. Hence
+we still create bright blue with `C_BLUE + C_BRIGHT`, and using `printc(C_BLUE, C_BRIGHT, ...)`
+is discouraged.
+
+For output using curses, we assume that colors 8 to 15 are output as proper colors 8 to
+15 instead of "bold" colors 0 to 7. If this is not the case, C_RESET_BRIGHT and C_RESET_FG
+will behave in a funny way. This happens hopefully only when only 8 colors are supported.
+
 """
 
 import functools as _functools
@@ -29,9 +45,16 @@ _ctable = (
     'magenta',
     'yellow' ,
     'white'   )
-    
+
+# flag values. Internal. Use the C_** Color objects in your code instead.
 C_BRIGHT_FLAG = 8
-C_RESET = None
+_C_RESET_BRIGHT_FLAG = 0x100
+_C_RESET_FG_FLAG = 0x400
+_C_RESET_BG_FLAG = 0x800
+_C_RESET_ALL_FLAG = 0x1000 # separate, since ANSI has a reset all function
+
+_all_flags = C_BRIGHT_FLAG, _C_RESET_BRIGHT_FLAG, _C_RESET_FG_FLAG, _C_RESET_BG_FLAG, _C_RESET_ALL_FLAG
+_all_flags_str = 'C_BRIGHT_FLAG', '_C_RESET_BRIGHT_FLAG', '_C_RESET_FG_FLAG', '_C_RESET_BG_FLAG', '_C_RESET_ALL_FLAG'
 
 def colorname(i):
     """ Returns the name of a color
@@ -43,7 +66,7 @@ def colorname(i):
 def _color_to_str(n):
     """ integer color number to string """
     if n < 16:
-        return ("bright " if (n & C_BRIGHT_FLAG) else "") + _ctable[n % 8]
+        return ("bright " if (n & 8) else "") + _ctable[n % 8]
     return str(n)
 
 @_functools.total_ordering
@@ -51,18 +74,28 @@ class Color:
     """
     Represent a change in color. This can be:
      - a foreground and/or background color;
-     - setting the bright flag;
+     - setting the bold flag;
      - resetting the style.
     
     Color is immutable, all operators return new objects. The color IDs
     0 to 15 follow Windows convention: 1 is blue and 4 is red. 16 to 255
     follows ANSI convention.
     
-    The add operator is supported, where a + b is equivalent to
-    'apply a, then b'
+    The operator a + b is mapped to ‘apply color a, then color b’. This
+    operation is neither associative, nor commutative. Green after
+    blue is obviously different from blue after green.
     
-    Currently, combining a color with C_BRIGHT_FLAG will result in
-    a bright color.
+    C_BRIGHT also behaves in a peculiar way for colors 0 to 16, due to originally
+    supporting only the 8 standard ANSI colors, and only 16 non-bold colors on Windows:
+    
+        - `C_BLUE` is color 1
+        - `C_BLUE + C_BRIGHT` is color 9
+        - `C_BLUE + C_BRIGHT + C_BRIGHT` is color 9 with the bold attribute set
+        - `C_BLUE + (C_BRIGHT + C_BRIGHT)` is color 9 without the bold attribute set because a Color only has one bright flag.
+    
+    Adding C_RESET_BRIGHT to color 9 with bold will remove the bold attribute. Adding C_RESET_BRIGHT again will bring it back to color 1.
+    
+    `printc(C_BLUE, C_BRIGHT, "text")` in ANSI or curses mode still represents 2 separate color operations: set the color to 1, and then set the bold attribute.
     """
     def make(fg, bg, flag=0):
         """ create color with given foreground and background colors (given as integers) """
@@ -80,34 +113,36 @@ class Color:
         """ create color with given background color (given as integer) """
         return Color.make(None, Color._val(color, intensity))
 
-    def fg6(r, g, b, intensity=None):
+    def fg6(r, g, b):
         """ create color with given 6-level RGB values (0−5) """
         r, g, b = int(r), int(g), int(b)
         if (max(r, g, b) > 5 or min(r, g, b) < 0):
             raise ValueError("RGB value out of range")
         color = 16 + b + 6*(g + 6*r)
-        return Color.make(Color._val(color, intensity), None)
+        return Color.make(color, None)
 
-    def bg6(r, g, b, intensity=None):
+    def bg6(r, g, b):
         """ create color with given 6-level RGB values (0−5) as background color """
         r, g, b = int(r), int(g), int(b)
         if (max(r, g, b) > 5 or min(r, g, b) < 0):
             raise ValueError("RGB value out of range")
         color = 16 + b + 6*(g + 6*r)
-        return Color.make(None, Color._val(color, intensity))
+        return Color.make(None, color)
 
     def __init__(self, color=None):
         """ Make empty object or make a copy
 
-        Color(): create a color which resets to the default
+        Color(): create a color object which does not change the printed color
         Color(color): copy a color object
+        
+        For constructing a color using an int, see fg() and bg().
         """
         # foreground color, if set
         self.fg = None
         # background color, if set
         self.bg = None
         # flags: now used to create a color object which just switches on
-        # the intensity bit (C_BRIGHT)
+        # the intensity bit (C_BRIGHT, or 'bold' on ANSI)
         self.flag = 0
     
         if color is None:
@@ -128,27 +163,26 @@ class Color:
     
     def bright(self):
         """
-        Returns a version with a bright foreground color
+        Returns a version with a bright foreground color (for colors 0 to 7), or with bold text.
         
         As a special case, C_RESET.bright() returns C_BRIGHT. """
         c = Color(self)
-        c.flag = C_BRIGHT_FLAG
-        c._apply_flags()
+        c._apply_flags(C_BRIGHT_FLAG)
         return c
         
     def dark(self):
-        """ returns a version with a dark foreground color """
+        """ returns a version with a dark foreground color for colors 8 to 15. """
         c = Color(self)
         c.flag = 0
         if c.fg and c.fg < 16: c.fg = c.fg % 8
         return c
         
     def bright_bg(self):
-        """ returns a version with a bright background color """
+        """ returns a version with a bright background color for colors 0 to 7 """
         return self.with_bg(self.bg or 0, True)
         
     def dark_bg(self):
-        """ returns a version with a dark background color """
+        """ returns a version with a dark background color for colors 8 to 15"""
         return self.with_bg(self.bg or 0, False)
         
     def _val(color, intensity):
@@ -156,44 +190,70 @@ class Color:
         a = int(color)
         if a < 16:
             if intensity:
-                a = a | C_BRIGHT_FLAG
+                a = a | 8
             elif intensity is not None:
-                a = a & ~C_BRIGHT_FLAG
+                a = a & 7
         return a        
         
-    def _apply_flags(self):
-        """ Normalize this Color instance
+    def _apply_flags(self, new_flags):
+        """ Apply new flags to this Color instance
         
         a flag plus a color below 16 is converted to a high intensity color. """
-        if self.fg is not None and self.fg < 16 and self.flag:
-            self.fg |= self.flag
-            self.flag = 0
+
+        # reset color flags: eat foreground or background
+        if new_flags & _C_RESET_FG_FLAG:
+            self.fg = None
+        if new_flags & _C_RESET_BG_FLAG:
+            self.bg = None
+
+        # mutually exclusive brightness flags, and fold into colors 0 to 15
+        if new_flags & C_BRIGHT_FLAG:
+            self.flag &= ~_C_RESET_BRIGHT_FLAG
+
+            # emboldening colors 0 to 7 creates colors 8 to 15 instead of bold
+            if self.fg is not None and self.fg < 8:
+                new_flags &= ~C_BRIGHT_FLAG
+                self.fg += 8
+
+        if new_flags & _C_RESET_BRIGHT_FLAG:
+            if self.flag & C_BRIGHT_FLAG:
+                self.flag &= ~C_BRIGHT_FLAG
+            elif 8 <= self.fg < 16:
+                new_flags &= ~_C_RESET_BRIGHT_FLAG
+                self.fg -= 8
         
+        self.flag |= new_flags
+    
+    def _add(self, b):
+        c = Color(self)
+        if b.flag & _C_RESET_ALL_FLAG:
+            return Color.make(None, None, _C_RESET_ALL_FLAG)
+
+        c.flag &= ~_C_RESET_ALL_FLAG
+        if b.fg is not None:
+            c.fg = int(b.fg)
+            c.flag &= ~_C_RESET_FG_FLAG
+        if b.bg is not None:
+            c.flag &= ~_C_RESET_BG_FLAG
+            c.bg = int(b.bg)
+        c._apply_flags(b.flag)
+        return c
+    
     # a + b: apply b after a
     def __add__(a, b):
-        c = Color(a)
-        if b is None: return c
+        if not b: Color(a)
         try:
-            if b.fg is not None: c.fg = int(b.fg)
-            if b.bg is not None: c.bg = int(b.bg)
-            c.flag |= b.flag
-            c._apply_flags()
-            return c
+            return a._add(b)
         except AttributeError:
             raise ValueError("Can't add Color to "+b.__class__.__name__)
 
     # a + b: apply b after a
     def __radd__(b, a):
-        c = Color(b)
-        if a is None: return c
+        if not a: return Color(b)
         try:
-            if b.fg is None: c.fg = int(a.fg)
-            if b.bg is None: c.bg = int(a.bg)
-            c.flag |= a.flag
-            c._apply_flags()
-            return c
+            return a._add(b)
         except AttributeError:
-            raise ValueError("Can't add "+ a.__class__.__name__ + " to Color")
+            raise ValueError("Can't add Color to "+a.__class__.__name__)
         
     # bool(self)
     def __bool__(self):
@@ -202,7 +262,9 @@ class Color:
     # repr(self)
     def __repr__(self):
         # with flag:
-        if self.flag == C_BRIGHT_FLAG: return  'Color({}, {}, C_BRIGHT_FLAG)'.format(self.fg, self.bg)
+        if self.flag:
+            s = [y for x, y in zip(_all_flags, _all_flags_str) if self.flag & x]
+            return  'Color({}, {}, {})'.format(self.fg, self.bg, ' | '.join(s))
         # regular color, or None
         return 'Color({}, {})'.format(self.fg, self.bg)
 
@@ -210,17 +272,26 @@ class Color:
     def __str__(self):
         # reset:
         if not self:
+            return []
+        if self.flag & _C_RESET_ALL_FLAG:
             return '[reset]'
         
-        s = ''
-        if self.flag:
-            s += 'bright'
+        s = []
+        if self.flag & C_BRIGHT_FLAG:
+            s.append('bold')
+        if self.flag & _C_RESET_BRIGHT_FLAG:
+            s.append('non-bold')
+        if self.flag & _C_RESET_FG_FLAG:
+            s.append('non-colored')
         if self.fg:
-            if s: s += ' '
-            s += _color_to_str(self.fg)
+            s.append(_color_to_str(self.fg))
+        s = ' '.join(s)
         if self.bg:
             if s: s += ', '
             s += _color_to_str(self.bg) + ' background'
+        if self.flag & _C_RESET_BG_FLAG:
+            if s: s += ', '
+            s.append('no background')
         return '[' + s + ']'
 
     # hash(self)
@@ -239,8 +310,14 @@ class Color:
 
 
 # color numbers
-C_RESET   = Color()
 
+#: Color object that represents no action to change color
+C_NO_COLOR = Color()
+#: reset all attributes
+C_RESET   = Color.make(None, None, _C_RESET_ALL_FLAG)
+
+# basic 8 foreground colors
+# bright_bg() can be used for high-intensity background colors.
 C_BLACK   = Color.fg(0)
 C_BLUE    = Color.fg(1)
 C_GREEN   = Color.fg(2)
@@ -250,9 +327,16 @@ C_MAGENTA = Color.fg(5)
 C_YELLOW  = Color.fg(6)
 C_WHITE   = Color.fg(7)
 
-""" special value which turns on "bright" (also called "bold") """
+#: Enable high intensity bit, and bold
 C_BRIGHT  = Color.make(None, None, C_BRIGHT_FLAG)
+#: Disable bold, and high intensity bit
+C_RESET_BRIGHT  = Color.make(None, None, _C_RESET_BRIGHT_FLAG)
+#: Reset foreground color to default
+C_RESET_FG  = Color.make(None, None, _C_RESET_FG_FLAG)
+#: Reset background color to default
+C_RESET_BG  = Color.make(None, None, _C_RESET_BG_FLAG)
 
+# basic 8 background colors
 C_BG_BLACK   = Color.bg(0)
 C_BG_BLUE    = Color.bg(1)
 C_BG_GREEN   = Color.bg(2)
@@ -272,6 +356,9 @@ def enableColorPrinting(flag):
        - C_COLOR_ON: always try to output color if possible on this platform
        - C_COLOR_AUTO (default): only output color if the file handle appears to be a console.
        - C_COLOR_ANSI: always output ANSI sequences (on Windows this switches to outputting ANSI)
+   
+    These values are stored in the tuple `C_COLOR_OPTION_LIST` so you can easily present them as
+    choises for eg. argparse options.
     """
     global _useColorFlag
     if flag not in C_COLOR_OPTION_LIST:
@@ -288,28 +375,32 @@ def _set_color_raw_ansi(color, f):
     """ Sets current color using ANSI codes
 
     Used on Windows 10 in ANSI mode, or as a fallback if neither WIN32 or curses are available. """
-    if not color: 
+    if color.flag & _C_RESET_ALL_FLAG:
         _print_el(f, '\033[0m')
         return
         
     ansi = []
 
-    if color.flag: 
-        # only bright for now.
+    if color.flag & C_BRIGHT_FLAG: 
         ansi.append('1')
+    elif color.flag & _C_RESET_BRIGHT_FLAG: 
+        ansi.append('22')
 
-    if color.fg is not None:
+    if color.flag & _C_RESET_FG_FLAG:
+        ansi.append('39')
+    elif color.fg is not None:
         if color.fg < 16:
-            intensity = (color.fg >= C_BRIGHT_FLAG)
+            intensity = (color.fg >= 8)
             ansiC = ((color.fg & 1) << 2) + (color.fg & 2) + ((color.fg & 4) >> 2)
-            ansi.append('3' + str(ansiC))
-            if intensity: ansi.append('1')
+            ansi.append(('9' if intensity else '3') + str(ansiC))
         else:
             ansi.append('38;5;' + str(color.fg))
 
-    if color.bg is not None:
+    if color.flag & _C_RESET_BG_FLAG:
+        ansi.append('49')
+    elif color.bg is not None:
         if color.bg < 16:
-            intensity = (color.bg >= C_BRIGHT_FLAG)
+            intensity = (color.bg >= 8)
             ansiC = ((color.bg & 1) << 2) + (color.bg & 2) + ((color.bg & 4) >> 2)
             ansi.append(('10' if intensity else '4') + str(ansiC))
         else:
@@ -320,6 +411,7 @@ def _set_color_raw_ansi(color, f):
 
 
 def _reduce_16(n):
+    """ return a color value between 0 and 15 that approximates the given value."""
     if n < 16:
         return n
     
@@ -351,8 +443,6 @@ def _reduce_16(n):
             return 8
     
     if (val > 4):   col = col | 8
-    
-    
     
     return col
 
@@ -456,11 +546,16 @@ if _sys.platform == 'win32':
         # if the Console API is not available, our custom printing doesn't work at all
         return _istty(file)
 
-    # using WriteConsoleW also solves this stupid UnicodeEncodeError on printing fancy characters:
+    # using WriteConsoleW also solves this stupid UnicodeEncodeError on printing fancy characters. It
+    # is however slower than print().
     def _print_el(file, s):
-        n = _ctypes.c_int(0)
-        utf16 = s.encode('utf-16-le') # we need to count 2 'code' units for characters beyond U+FFFF
-        _writeConsole(_con[file].h, s, len(utf16) // 2, _ctypes.byref(n), None)
+        con = _con[file]
+        if con.use_ansi:
+            print(end=s)
+        else:
+            n = _ctypes.c_int(0)
+            utf16 = s.encode('utf-16-le') # we need to count 2 'code' units for characters beyond U+FFFF
+            _writeConsole(con.h, s, len(utf16) // 2, _ctypes.byref(n), None)
         
         
     def _set_color(color, f):
@@ -469,17 +564,22 @@ if _sys.platform == 'win32':
             _set_color_raw_ansi(color, f)
             return
             
-        if not color:
+        if color.flag & _C_RESET_ALL_FLAG:
             color = con.default
         else:
             color = con.color + color
+            # handle reset color flags
+            if color.fg is None: color.fg = con.default.fg
+            if color.bg is None: color.bg = con.default.bg
+            color.flag &= ~_C_RESET_FG_FLAG
+            color.flag &= ~_C_RESET_BG_FLAG
         
         con.color = color
         fg, bg = _reduce_16(color.fg), _reduce_16(color.bg)
         attr = fg + bg * 16
         bool = _setConsoleTextAttribute(con.h, attr)
     
-    _need_flush = any(c.istty for _, c in _con.items())
+    _need_flush = any(c.istty and not c.use_ansi for _, c in _con.items())
     
 # Unix and Windows/msys
 else:
@@ -510,42 +610,50 @@ else:
             return "Curses" if _cols >= 8 else "None"
 
         def _set_color(color, f):
-            if not color: 
+            if color.flag & _C_RESET_ALL_FLAG:
                 _print_el(f, _colreset)
                 return
                 
-            if color.flag: 
-                # map "bright" to the bold attribute
+            if color.flag & C_BRIGHT_FLAG: 
                 _print_el(f, _colbold)
+            elif color.flag & _C_RESET_BRIGHT_FLAG: 
+                _print_el(f, '\033[22m')
             
-            if color.fg is not None:
+            if color.flag & _C_RESET_FG_FLAG:
+                _print_el(f, '\033[39m')
+            elif color.fg is not None:
                 fg = color.fg
                 if _cols <= 16:
                     fg = _reduce_16(fg)
                 
                 if fg < 16:
                     ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
-                    if fg >= C_BRIGHT_FLAG:
-                        _print_el(f, _colbold)
+                    if fg >= 8:
+                        if _cols >= 16:
+                            ansiC += 8
+                        else:
+                            _print_el(f, _colbold)
                 else:
                     ansiC = fg
                 _print_el(f, _cu.tparm(_afstr, ansiC).decode('ascii'))
 
-            if color.bg is not None:
+            if color.flag & _C_RESET_BG_FLAG:
+                _print_el(f, '\033[49m')
+            elif color.bg is not None:
                 bg = color.bg
                 if _cols <= 16:
                     bg = _reduce_16(bg)
             
                 if bg < 16:
                     ansiC = ((bg & 1) << 2) + (bg & 2) + ((bg & 4) >> 2);
-                    if _cols >= 16 and (bg & C_BRIGHT_FLAG):
-                        ansiC += C_BRIGHT_FLAG
+                    if _cols >= 16 and (bg & 8):
+                        ansiC += 8
                 else:
                     ansiC = bg
                 _print_el(f, _cu.tparm(_abstr, ansiC).decode('ascii'))
 
     except ImportError:
-        # no curses available. Assume the usual ANSI codes will work
+        # Assume the usual ANSI codes will work
         _use_ansi_fallback()
         
     _need_flush = False
@@ -611,12 +719,12 @@ def printc(*args, **kwargs):
     try:
         if _need_flush: file.flush()
 
-
         sep = None
         for s in args:
 
             if type(s) is Color:
-                _set_color(s, file)
+                if s:
+                    _set_color(s, file)
             else:
                 # handle separators. Colors do not trigger
                 # separators
@@ -708,20 +816,52 @@ if __name__ == "__main__":
         printc("You can display a color chart by using the", C_BRIGHT, "--chart", C_RESET, "option.")
         printc("In 256 color mode use", C_BRIGHT, "--chart256", C_RESET, "or", C_BRIGHT, "--chart256bg", C_RESET, end=".\n")
         printc("Use", C_BRIGHT, "--force", C_RESET, "to always try to print color.")
+        printc(C_BRIGHT, "--info", C_RESET, "and", C_BRIGHT, "--test", C_RESET, "print extra information.")
     
-    elif "--chart" in _sys.argv:
+    if "--test" in _sys.argv:
         print()
-        printc("standard text, ", C_BRIGHT, "bold text", C_RESET, ".", sep="")
+        printc("Gray fg ramp: ", end='')
+        for i in range(232, 256):
+            printc(Color.fg(i), "██", end='')
+        printc()
+        printc("Gray bg ramp: ", end='')
+        for i in range(232, 256):
+            printc(Color.bg(i), "  ", end='')
+        printc()
+        printc()
+        for j in range(0, 6, 2):
+            printc("Color cube: " if j == 2 else "            ", end='')
+            for i in range(16, 232, 6):
+                printc(Color.bg(i + j), Color.fg(i+j+1), "▄", end='')
+            printc()
+        printc()
+        printc("Color 0 to 15 behavior:")
+        printc('  - Black:', C_BLACK, C_BRIGHT, "bold text")
+        printc('  - Green:', C_GREEN, "regular text")
+        printc('  - Green:', C_GREEN, C_BRIGHT, "bold text")
+        printc('  - Green:', C_GREEN + C_BRIGHT, "bright text")
+        printc('  - Green:', C_GREEN + C_BRIGHT + C_BRIGHT, "bright bold text")
+        printc('  - Bright vs. bold:', C_YELLOW + C_BRIGHT, "Bright yellow,", C_RESET_FG, "default color")
+        printc()
+        if numColors() > 16:
+            printc("Color 16 to 255 behavior:")
+            printc('  - Black:', Color.fg6(0, 0, 0), C_BRIGHT, "bold text")
+            printc('  - Green:', Color.fg6(0, 4, 1), "regular text")
+            printc('  - Green:', Color.fg6(0, 4, 1) + C_BRIGHT, "bold text")
+
+    if "--chart" in _sys.argv:
+        print()
+        printc("standard text, ", C_BRIGHT, "bold text", C_RESET_BRIGHT, ".", sep="")
         print()
         print(" {:<26}  {:<26}".format("foreground colors", "background colors"))
         for i in range(8):
-            printc("{:2}:"  .format(i),               Color.fg(i)             , "{:<7}".format(colorname(i)), C_RESET,
-                   "  {:2}:".format(i+C_BRIGHT_FLAG), Color.fg(i, True)       , "{:<7}".format(colorname(i)), C_RESET,
-                   "  {:2}:".format(i)              , Color.bg(i)             , "{:<7}".format(colorname(i)), C_RESET,
-                   "  {:2}:".format(i+C_BRIGHT_FLAG), C_BLACK.with_bg(i, True), "{:<7}".format(colorname(i)), C_RESET)
+            printc("  {:2}:".format(i)  , Color.fg(i)      , "{:<7}".format(colorname(i)), C_RESET_FG,
+                   "  {:2}:".format(i+8), Color.fg(i, True), "{:<7}".format(colorname(i)), C_RESET_FG,
+                   "  {:2}:".format(i)  , Color.bg(i)      , "{:<7}".format(colorname(i)), C_RESET_BG,
+                   "  {:2}:".format(i+8), Color.bg(i, True), "{:<7}".format(colorname(i)), C_RESET_BG)
 
     
-    elif "--chart256" in _sys.argv or "--chart256bg" in _sys.argv:
+    if "--chart256" in _sys.argv or "--chart256bg" in _sys.argv:
         C = (lambda x : Color.make(0, x)) if "--chart256bg" in _sys.argv else Color.fg
     
         print()
