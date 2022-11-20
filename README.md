@@ -32,6 +32,10 @@ For output using curses, we assume that colors 8 to 15 are output as proper colo
 15 instead of "bold" colors 0 to 7. If this is not the case, C_RESET_BRIGHT and C_RESET_FG
 will behave in some funny way. This happens hopefully only when only 8 colors are supported.
 
+If you output 256 or truecolor to a terminal that only supports 256 colors (or poor old
+16-color on Windows 7), some level of fallback is provided. But obviously, manage your
+expectations.
+
 ## Output modes
 
 Color modes used by this package:
@@ -39,12 +43,21 @@ Color modes used by this package:
  - `Win32`: Console API: old versions of Windows. You may define an environment variable
    `%CMDCOLOR_ANSI%` and set it to `0` if you want this mode on current Windows versions.
  - `ANSI`: ANSI escape codes: Windows versions that support the ENABLE_VIRTUAL_TERMINAL_PROCESSING flag.
- - `Curses`: where available we obtain valid escape codes from terminfo. However terminfo
-   does not provide codes for reset bold, background and foreground separately, for that we send
-   the standard ANSI escape codes.
+ - `Curses`: if the `curses` module is available we obtain valid codes from terminfo. Only used when `$CMDCOLOR_CURSES` is set.
  - `None`: For output handles which aren’t terminals.
 
-## Caveats
+### Curses
 
-Curses thinks GNU screen only supports 8 colors. It actually supports both 16 foreground
-colors and 16 background colors.
+Curses is by default not used, except for detecting situations where only 16 colors are supported.
+Assuming that the standard ANSI codes work seems to be more reliable than assuming Curses returns
+the right info.
+
+ - Terminfo does not provide codes for reset bold, background and foreground separately, for that we send
+   the standard ANSI escape codes.
+
+ - Curses thinks GNU screen only supports 8 colors. It actually supports both 16 foreground
+   colors and 16 background colors.
+
+ - True color support is relatively recent, and kind of weird — are colors 0 to 255 now shades
+   of blue, or do they still produce the same palette as 256-color mode? When generating ANSI
+   sequences directly this point is moot, since these two cases just use different sequences.
