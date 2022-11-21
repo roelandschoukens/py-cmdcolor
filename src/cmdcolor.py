@@ -263,7 +263,7 @@ class Color:
 
     # a + b: apply b after a
     def __add__(a, b):
-        if not b: Color(a)
+        if not b: return Color(a)
         try:
             return a._add(b)
         except AttributeError:
@@ -322,9 +322,12 @@ class Color:
 
     # a == b
     def __eq__(a, b):
-        return (self.fg   == self.fg   and
-                self.bg   == self.bg   and
-                self.flag == self.flag )
+        try:
+            return (a.fg   == b.fg   and
+                    a.bg   == b.bg   and
+                    a.flag == b.flag )
+        except AttributeError:
+            return NotImplemented
 
     # a < b
     def __lt__(a, b):
@@ -504,6 +507,15 @@ def _reduce_16(n):
 
     return col
 
+
+def _reduce(cols, n):
+    if cols <= 16:
+        return _reduce_16(n)
+
+    if cols <= 256:
+        return _reduce_256(n)
+
+    return n
 
 def _use_ansi_fallback():
     """ Switch to ANSI printing. (can't undo this) """
@@ -686,11 +698,7 @@ else:
             if color.flag & _C_RESET_FG_FLAG:
                 _print_el(f, '\033[39m')
             elif color.fg is not None:
-                fg = color.fg
-                if _cols <= 256:
-                    fg = _reduce_256(fg)
-                elif _cols <= 16:
-                    fg = _reduce_16(fg)
+                fg = _reduce(_cols, color.fg)
 
                 if fg < 16:
                     ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
@@ -706,11 +714,7 @@ else:
             if color.flag & _C_RESET_BG_FLAG:
                 _print_el(f, '\033[49m')
             elif color.bg is not None:
-                bg = color.bg
-                if _cols <= 256:
-                    bg = _reduce_256(bg)
-                elif _cols <= 16:
-                    bg = _reduce_16(bg)
+                bg = _reduce(_cols, color.bg)
 
                 if bg < 16:
                     ansiC = ((bg & 1) << 2) + (bg & 2) + ((bg & 4) >> 2);
