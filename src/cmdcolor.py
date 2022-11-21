@@ -888,18 +888,18 @@ if __name__ == "__main__":
 
     if "--test" in _sys.argv:
         print()
-        printc("Gray fg ramp: ", end='')
+        printc("256-color gray ramp: fg: ", end='')
         for i in range(232, 256):
             printc(Color.fg(i), "██", end='')
         printc()
-        printc("Gray bg ramp: ", end='')
+        printc("                     bg: ", end='')
         for i in range(232, 256):
             printc(Color.bg(i), "  ", end='')
         printc()
         printc()
 
         for j in range(0, 6, 2):
-            printc("256-color cube: " if j == 2 else "                ", end='')
+            printc("256-color RGB cube: " if j == 2 else "                    ", end='')
             for i in range(16, 232, 6):
                 printc(Color.bg(i + j), Color.fg(i+j+1), "▄", end='')
             printc()
@@ -926,19 +926,14 @@ if __name__ == "__main__":
             printc()
         printc()
 
-        printc("Color 0 to 15 behavior:")
-        printc('  - Black:', C_BLACK, C_BRIGHT, "bold text")
-        printc('  - Green:', C_GREEN, "regular text")
-        printc('  - Green:', C_GREEN, C_BRIGHT, "bold text")
-        printc('  - Green:', C_GREEN + C_BRIGHT, "bright text")
-        printc('  - Green:', C_GREEN + C_BRIGHT + C_BRIGHT, "bright bold text")
-        printc('  - Bright vs. bold:', C_YELLOW + C_BRIGHT, "Bright yellow,", C_RESET_FG, "default color")
+        printc("16-color behavior: ", end='')
+        printc(        'Black:       ', C_BLACK, 'regular text', C_BRIGHT, 'bold text')
+        printc(' '*18, 'Green:       ', C_GREEN, 'regular text', C_GREEN, C_BRIGHT, "bold text")
+        printc(' '*18, 'Bright green:', C_GREEN + C_BRIGHT, "regular text", C_GREEN + C_BRIGHT + C_BRIGHT, "bold text")
+        printc(' '*18, 'Bright vs. bold:', C_YELLOW + C_BRIGHT, "Bright yellow,", C_RESET_FG, "default color")
         printc()
-        if numColors() > 16:
-            printc("Color 16 to 255 behavior:")
-            printc('  - Black:', Color.fg6(0, 0, 0), C_BRIGHT, "bold text")
-            printc('  - Green:', Color.fg6(0, 4, 1), "regular text")
-            printc('  - Green:', Color.fg6(0, 4, 1) + C_BRIGHT, "bold text")
+        printc('256-color behavior: Black:', Color.fg6(0, 0, 0), 'regular text', C_BRIGHT, 'bold text')
+        printc('                    Green:', Color.fg6(0, 4, 1), 'regular text', C_BRIGHT, 'bold text')
 
     if "--chart" in _sys.argv:
         print()
