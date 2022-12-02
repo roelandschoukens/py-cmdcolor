@@ -396,6 +396,15 @@ def enableColorPrinting(flag):
         _useColorFlag = flag
 
 
+def enableTrueColorPrinting(enable=True):
+    """ Enable or disable 24-bit color on platforms that use ANSI sequences.
+
+    Has no effect on Windows if we cannot use ANSI sequences, and on other platforms where
+    curses indicates less than 256 supported colors. """
+    global _ansi_colors
+    _ansi_colors = 0x1000000 if enable else 256
+
+
 def _set_color_raw_ansi(color, f):
     """ Sets current color using ANSI codes
 
@@ -414,34 +423,36 @@ def _set_color_raw_ansi(color, f):
     if color.flag & _C_RESET_FG_FLAG:
         ansi.append('39')
     elif color.fg is not None:
-        if color.fg < 16:
-            intensity = (color.fg >= 8)
-            ansiC = ((color.fg & 1) << 2) + (color.fg & 2) + ((color.fg & 4) >> 2)
+        fg = _reduce(_ansi_colors, color.fg)
+        if fg < 16:
+            intensity = (fg >= 8)
+            ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
             ansi.append(('9' if intensity else '3') + str(ansiC))
-        elif color.fg < 256:
+        elif fg < 256:
             ansi.append('38;5')
-            ansi.append(str(color.fg))
+            ansi.append(str(fg))
         else:
             ansi.append('38;2')
-            ansi.append(str((color.fg >> 16) & 0xff))
-            ansi.append(str((color.fg >>  8) & 0xff))
-            ansi.append(str((color.fg      ) & 0xff))
+            ansi.append(str((fg >> 16) & 0xff))
+            ansi.append(str((fg >>  8) & 0xff))
+            ansi.append(str((fg      ) & 0xff))
 
     if color.flag & _C_RESET_BG_FLAG:
         ansi.append('49')
     elif color.bg is not None:
-        if color.bg < 16:
-            intensity = (color.bg >= 8)
-            ansiC = ((color.bg & 1) << 2) + (color.bg & 2) + ((color.bg & 4) >> 2)
+        bg = _reduce(_ansi_colors, color.bg)
+        if bg < 16:
+            intensity = (bg >= 8)
+            ansiC = ((bg & 1) << 2) + (bg & 2) + ((bg & 4) >> 2)
             ansi.append(('10' if intensity else '4') + str(ansiC))
-        elif color.bg < 256:
+        elif bg < 256:
             ansi.append('48;5')
-            ansi.append(str(color.bg))
+            ansi.append(str(bg))
         else:
             ansi.append('48;2')
-            ansi.append(str((color.bg >> 16) & 0xff))
-            ansi.append(str((color.bg >>  8) & 0xff))
-            ansi.append(str((color.bg      ) & 0xff))
+            ansi.append(str((bg >> 16) & 0xff))
+            ansi.append(str((bg >>  8) & 0xff))
+            ansi.append(str((bg      ) & 0xff))
 
     _print_el(f, '\033[' + ';'.join(ansi) + 'm')
 
@@ -517,12 +528,13 @@ def _reduce(cols, n):
 
     return n
 
-def _use_ansi_fallback():
+def _use_ansi_fallback(colors=0x1000000):
     """ Switch to ANSI printing. (can't undo this) """
-    global _colorMode, _colors, _can_use, _print_el, _set_color
+    global _ansi_colors, _colorMode, _colors, _can_use, _print_el, _set_color
 
+    _ansi_colors = colors
     _colorMode = lambda file : "ANSI"
-    _colors = lambda file : 0x1000000
+    _colors = lambda file : _ansi_colors
     _can_use = lambda file: True
     _print_el = lambda file, s: print(file=file, end=s)
     _set_color = _set_color_raw_ansi
@@ -599,6 +611,7 @@ if _sys.platform == 'win32':
     _std_h = ((_sys.stdout, _STD_OUTPUT_HANDLE),
               (_sys.stderr, _STD_ERROR_HANDLE))
     _con = { f[0] : _Con(f[1]) for f in _std_h }
+    _ansi_colors = 0x1000000
 
     def _istty(file):
         c = _con.get(file)
@@ -739,7 +752,7 @@ def canPrintColor(file=_sys.stdout):
 def numColors(file=_sys.stdout):
     """ Number of colors we can print on this file.
 
-    this may return 1, 8, 16 or 256 """
+    common values are 8, 16 or 256, and 0x1000000 if true color printing is enabled. """
     if not _can_use(file):
         return 1
     return _colors(file)
