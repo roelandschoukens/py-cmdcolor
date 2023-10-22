@@ -813,6 +813,9 @@ def printc(*args, **kwargs):
 
     _print_el(file, end)
 
+    if kwargs.get('flush', False):
+        file.flush()
+
 
 if __name__ == "__main__":
 
