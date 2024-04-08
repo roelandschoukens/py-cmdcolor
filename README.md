@@ -1,9 +1,13 @@
 # CmdColor
 
-This is Roeland’s CMD color module, which abstracts away either the ANSI color
-codes on VT-style terminals, or the win32 console API. The latter is also called
+This is Roeland’s CMD color module, originally intended to abstract away either the ANSI
+color codes on VT-style terminals, or the win32 console API. The latter is also called
 directly for printing text so you can print any Unicode character up to U+FFFF
 on the console.
+
+_You may notice that both of those problems no longer exist (they are solved in respectively
+Windows 10, and Python 3.6), so the main remaining functions are to have some more convenient
+interface to define RGB colors, and to have it enable VT processing on Windows._
 
 Use the `printc()` function and the various `C_...` constants defined in this package:
 
@@ -40,9 +44,12 @@ expectations.
 
 Color modes used by this package:
 
- - `Win32`: Console API: old versions of Windows. You may define an environment variable
-   `%CMDCOLOR_ANSI%` and set it to `0` if you want this mode on current Windows versions.
- - `ANSI`: ANSI escape codes: Windows versions that support the ENABLE_VIRTUAL_TERMINAL_PROCESSING flag.
+ - `Win32`: Console API: old versions of Windows. As the name of this module implies, this was the
+   original way this module operated, but it is now largely obsolete. It solved 2 problems back in the
+   day, one is how to print colors at all, and the second is how to print Unicode on the terminal (Python
+   used the ANSI functions with the local 8-bit character set until version 3.5).
+ - `ANSI`: ANSI escape codes: Windows versions that support the ENABLE_VIRTUAL_TERMINAL_PROCESSING flag. If the `%CMDCOLOR_ANSI%`
+   environment variable is set to 0, cmdcolor will not attempt to enable VT processing and use the old Console API mode.
  - `Curses`: if the `curses` module is available we obtain valid codes from terminfo. Only used when `$CMDCOLOR_CURSES` is set.
  - `None`: For output handles which aren’t terminals.
 
