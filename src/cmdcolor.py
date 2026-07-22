@@ -19,9 +19,18 @@ For output using curses, we assume that colors 8 to 15 are output as proper colo
 15 instead of "bold" colors 0 to 7. If this is not the case, C_RESET_BRIGHT and C_RESET_FG
 will behave in a funny way. This happens hopefully only when only 8 colors are supported.
 
+Environment variables:
+ - CMDCOLOR_CURSES=1: Use curses where available for color printing
+ - CMDCOLOR_ANSI=0: Do not use ANSI sequences on Windows when printing to a console
+                    (use win32 Console API only)
+ - NO_COLOR, CLICOLOR=0: Do not output color
+ - CLICOLOR_FORCE=1: Output color by default even if not a terminal
+ - COLORTERM: If set, and not in ("truecolor", "24bit"), ANSI output uses
+   only 256 colors
 """
 
 import functools as _functools
+from os import environ as _environ
 import sys as _sys
 import warnings as _warnings
 
@@ -34,7 +43,18 @@ C_COLOR_AUTO = "auto"
 C_COLOR_ANSI = "ansi"
 C_COLOR_OPTION_LIST = (C_COLOR_OFF, C_COLOR_ON, C_COLOR_AUTO, C_COLOR_ANSI)
 
-_useColorFlag = C_COLOR_AUTO
+# default color usage us auto unless indicated otherwise by the
+# environment
+_useColorFlagDefault = C_COLOR_AUTO
+print(_environ.get("CLICOLOR", ""))
+if _environ.get("NO_COLOR", "") != "" or _environ.get("CLICOLOR", "1") == "0":
+    _useColorFlagDefault = C_COLOR_OFF
+if _environ.get("CLICOLOR_FORCE", "0") == "1":
+    _useColorFlagDefault = C_COLOR_ON
+_useColorFlag = _useColorFlagDefault
+_ansi_max = 256 \
+    if _environ.get("COLORTERM", "") not in ("", "truecolor", "24bit") \
+    else 0x1000000
 
 _ctable = (
     'black'  ,
@@ -388,9 +408,12 @@ def enableColorPrinting(flag):
     global _useColorFlag
     if flag not in C_COLOR_OPTION_LIST:
         raise ValueError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
+    if flag == C_COLOR_AUTO:
+        flag = _useColorFlagDefault
+
     if flag == C_COLOR_ANSI:
         _useColorFlag = C_COLOR_ON
-        _use_ansi_fallback(0x1000000)
+        _use_ansi_fallback(_ansi_max)
         _need_flush = False
     else:
         _useColorFlag = flag
@@ -538,7 +561,6 @@ if _sys.platform == 'win32':
 
     import ctypes as _ctypes
     import ctypes.wintypes as _wintypes
-    from os import environ as _environ
 
     # Win32 API constants
     _ENABLE_PROCESSED_OUTPUT = 0x0001
@@ -582,8 +604,10 @@ if _sys.platform == 'win32':
             global _colorMode
             self.h = _ctypes.windll.kernel32.GetStdHandle(std_h)
             self.default = _get_color(self.h)
-            self.use_ansi = False
             self.istty = (self.default is not None)
+            # if not a console, use ANSI sequences for color
+            # (applies when color is forced to be on for non-tty files)
+            self.use_ansi = not self.istty
             if self.istty and _environ.get('CMDCOLOR_ANSI', '1') == '1':
                 # enable ANSI sequences
                 mode = _DWORD(0)
@@ -603,7 +627,7 @@ if _sys.platform == 'win32':
     _std_h = ((_sys.stdout, _STD_OUTPUT_HANDLE),
               (_sys.stderr, _STD_ERROR_HANDLE))
     _con = { f[0] : _Con(f[1]) for f in _std_h }
-    _ansi_colors = 0x1000000
+    _ansi_colors = _ansi_max
 
     def _istty(file):
         c = _con.get(file)
@@ -611,21 +635,21 @@ if _sys.platform == 'win32':
 
     def _colors(file):
         c = _con.get(file)
-        return 1 if c is None else (0x1000000 if c.use_ansi else 16)
+        return _ansi_max if (c is None or c.use_ansi) else 16
 
     def _colorMode(file):
         c = _con.get(file)
-        return "None" if c is None else ("ANSI" if c.use_ansi else "win32")
+        return "ANSI" if (c is None or c.use_ansi) else "win32"
 
-    def _can_use(file):
-        # if the Console API is not available, our custom printing doesn't work at all
-        return _istty(file)
+    def _can_use(_file):
+        # Always true (either the Console API or ANSI sequences are used)
+        return True
 
     # using WriteConsoleW also solves this stupid UnicodeEncodeError on printing fancy characters. It
     # is however slower than print().
     def _print_el(file, s):
-        con = _con[file]
-        if con.use_ansi:
+        con = _con.get(file)
+        if not con or con.use_ansi:
             print(end=s)
         else:
             n = _ctypes.c_int(0)
@@ -634,8 +658,8 @@ if _sys.platform == 'win32':
 
 
     def _set_color(color, f):
-        con = _con[f]
-        if con.use_ansi:
+        con = _con.get(f)
+        if not con or con.use_ansi:
             _set_color_raw_ansi(color, f)
             return
 
@@ -669,7 +693,6 @@ else:
         # see if we have curses available. If so, use it to figure
         # out which colors we can use
         import curses as _cu
-        from os import environ as _environ
         _cu.setupterm()
         _ansi_colors = _cu.tigetnum("colors")
         # use curses only if we have only 16 colors or if
@@ -708,7 +731,7 @@ else:
             if color.flag & _C_RESET_FG_FLAG:
                 _print_el(f, '\033[39m')
             elif color.fg is not None:
-				# assume colors 9 to 16 may not work (use bold instead)
+                # assume colors 9 to 16 may not work (use bold instead)
                 fg = _reduce(_ansi_colors, color.fg)
 
                 if fg < 16:
@@ -739,7 +762,7 @@ else:
         # Assume the usual ANSI codes will work
         # Most terminals support true colors, even though their $TERM
         # variable only indicates 256 color support.
-        colors = 0x1000000
+        colors = _ansi_max
         # older versions (pre macOS 26, aka version 460) of the Apple
         # Terminal support only 256 colors. (But note that this detection does not
         # work over SSH)
