@@ -390,60 +390,10 @@ def enableColorPrinting(flag):
         raise ValueError("flag not in "+", ".join(C_COLOR_OPTION_LIST))
     if flag == C_COLOR_ANSI:
         _useColorFlag = C_COLOR_ON
-        _use_ansi_fallback()
+        _use_ansi_fallback(0x1000000)
         _need_flush = False
     else:
         _useColorFlag = flag
-
-
-def _set_color_raw_ansi(color, f):
-    """ Sets current color using ANSI codes
-
-    Used on Windows 10 in ANSI mode, or as a fallback if neither WIN32 or curses are available. """
-    if color.flag & _C_RESET_ALL_FLAG:
-        _print_el(f, '\033[0m')
-        return
-
-    ansi = []
-
-    if color.flag & C_BRIGHT_FLAG:
-        ansi.append('1')
-    elif color.flag & _C_RESET_BRIGHT_FLAG:
-        ansi.append('22')
-
-    if color.flag & _C_RESET_FG_FLAG:
-        ansi.append('39')
-    elif color.fg is not None:
-        if color.fg < 16:
-            intensity = (color.fg >= 8)
-            ansiC = ((color.fg & 1) << 2) + (color.fg & 2) + ((color.fg & 4) >> 2)
-            ansi.append(('9' if intensity else '3') + str(ansiC))
-        elif color.fg < 256:
-            ansi.append('38;5')
-            ansi.append(str(color.fg))
-        else:
-            ansi.append('38;2')
-            ansi.append(str((color.fg >> 16) & 0xff))
-            ansi.append(str((color.fg >>  8) & 0xff))
-            ansi.append(str((color.fg      ) & 0xff))
-
-    if color.flag & _C_RESET_BG_FLAG:
-        ansi.append('49')
-    elif color.bg is not None:
-        if color.bg < 16:
-            intensity = (color.bg >= 8)
-            ansiC = ((color.bg & 1) << 2) + (color.bg & 2) + ((color.bg & 4) >> 2)
-            ansi.append(('10' if intensity else '4') + str(ansiC))
-        elif color.bg < 256:
-            ansi.append('48;5')
-            ansi.append(str(color.bg))
-        else:
-            ansi.append('48;2')
-            ansi.append(str((color.bg >> 16) & 0xff))
-            ansi.append(str((color.bg >>  8) & 0xff))
-            ansi.append(str((color.bg      ) & 0xff))
-
-    _print_el(f, '\033[' + ';'.join(ansi) + 'm')
 
 
 def _reduce_256(n):
@@ -517,12 +467,66 @@ def _reduce(cols, n):
 
     return n
 
-def _use_ansi_fallback():
-    """ Switch to ANSI printing. (can't undo this) """
-    global _colorMode, _colors, _can_use, _print_el, _set_color
 
+def _set_color_raw_ansi(color, f):
+    """ Sets current color using ANSI codes
+
+    Used on Windows 10 in ANSI mode, or as a fallback if neither WIN32 or curses are available. """
+    if color.flag & _C_RESET_ALL_FLAG:
+        _print_el(f, '\033[0m')
+        return
+
+    ansi = []
+
+    if color.flag & C_BRIGHT_FLAG:
+        ansi.append('1')
+    elif color.flag & _C_RESET_BRIGHT_FLAG:
+        ansi.append('22')
+
+    if color.flag & _C_RESET_FG_FLAG:
+        ansi.append('39')
+    elif color.fg is not None:
+        fg = _reduce(_ansi_colors, color.fg)
+        if fg < 16:
+            intensity = (fg >= 8)
+            ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
+            ansi.append(('9' if intensity else '3') + str(ansiC))
+        elif fg < 256:
+            ansi.append('38;5')
+            ansi.append(str(fg))
+        else:
+            ansi.append('38;2')
+            ansi.append(str((fg >> 16) & 0xff))
+            ansi.append(str((fg >>  8) & 0xff))
+            ansi.append(str((fg      ) & 0xff))
+
+    if color.flag & _C_RESET_BG_FLAG:
+        ansi.append('49')
+    elif color.bg is not None:
+        bg = _reduce(_ansi_colors, color.bg)
+        if bg < 16:
+            intensity = (bg >= 8)
+            ansiC = ((bg & 1) << 2) + (bg & 2) + ((bg & 4) >> 2)
+            ansi.append(('10' if intensity else '4') + str(ansiC))
+        elif bg < 256:
+            ansi.append('48;5')
+            ansi.append(str(bg))
+        else:
+            ansi.append('48;2')
+            ansi.append(str((bg >> 16) & 0xff))
+            ansi.append(str((bg >>  8) & 0xff))
+            ansi.append(str((bg      ) & 0xff))
+
+    _print_el(f, '\033[' + ';'.join(ansi) + 'm')
+
+
+def _use_ansi_fallback(num_colors):
+    """ Switch to ANSI printing. (can't undo this) """
+    global _colorMode, _ansi_colors, _colors, _can_use, _print_el, _set_color
+
+    _ansi_colors = num_colors
     _colorMode = lambda file : "ANSI"
-    _colors = lambda file : 0x1000000
+    _colors = lambda file : _ansi_colors
     _can_use = lambda file: True
     _print_el = lambda file, s: print(file=file, end=s)
     _set_color = _set_color_raw_ansi
@@ -599,6 +603,7 @@ if _sys.platform == 'win32':
     _std_h = ((_sys.stdout, _STD_OUTPUT_HANDLE),
               (_sys.stderr, _STD_ERROR_HANDLE))
     _con = { f[0] : _Con(f[1]) for f in _std_h }
+    _ansi_colors = 0x1000000
 
     def _istty(file):
         c = _con.get(file)
@@ -661,11 +666,16 @@ else:
         print(file=file, end=s)
 
     try:
+        # see if we have curses available. If so, use it to figure
+        # out which colors we can use
         import curses as _cu
         from os import environ as _environ
         _cu.setupterm()
-        _cols = _cu.tigetnum("colors")
-        use_curses = _cols <= 16 or _environ.get('CMDCOLOR_CURSES', '0') == '1'
+        _ansi_colors = _cu.tigetnum("colors")
+        # use curses only if we have only 16 colors or if
+        # explicitly requested. Otherwise print raw sequences (since that
+        # is the only reliable way of getting 24-bit colors)
+        use_curses = _ansi_colors <= 16 or _environ.get('CMDCOLOR_CURSES', '0') == '1'
 
     except ImportError:
         use_curses = False
@@ -677,13 +687,13 @@ else:
         _colreset =  _cu.tigetstr("sgr0").decode('ascii')
 
         def _can_use(file):
-            return _cols and _cols >= 8
+            return _ansi_colors and _ansi_colors >= 8
 
         def _colors(file):
-            return _cols
+            return _ansi_colors
 
         def _colorMode(file):
-            return "Curses" if _cols >= 8 else "None"
+            return "Curses" if _ansi_colors >= 8 else "None"
 
         def _set_color(color, f):
             if color.flag & _C_RESET_ALL_FLAG:
@@ -698,12 +708,13 @@ else:
             if color.flag & _C_RESET_FG_FLAG:
                 _print_el(f, '\033[39m')
             elif color.fg is not None:
-                fg = _reduce(_cols, color.fg)
+				# assume colors 9 to 16 may not work (use bold instead)
+                fg = _reduce(_ansi_colors, color.fg)
 
                 if fg < 16:
                     ansiC = ((fg & 1) << 2) + (fg & 2) + ((fg & 4) >> 2)
                     if fg >= 8:
-                        if _cols >= 16:
+                        if _ansi_colors >= 16:
                             ansiC += 8
                         else:
                             _print_el(f, _colbold)
@@ -714,11 +725,11 @@ else:
             if color.flag & _C_RESET_BG_FLAG:
                 _print_el(f, '\033[49m')
             elif color.bg is not None:
-                bg = _reduce(_cols, color.bg)
+                bg = _reduce(_ansi_colors, color.bg)
 
                 if bg < 16:
                     ansiC = ((bg & 1) << 2) + (bg & 2) + ((bg & 4) >> 2);
-                    if _cols >= 16 and (bg & 8):
+                    if _ansi_colors >= 16 and (bg & 8):
                         ansiC += 8
                 else:
                     ansiC = bg
@@ -726,7 +737,20 @@ else:
 
     else:
         # Assume the usual ANSI codes will work
-        _use_ansi_fallback()
+        # Most terminals support true colors, even though their $TERM
+        # variable only indicates 256 color support.
+        colors = 0x1000000
+        # older versions (pre macOS 26, aka version 460) of the Apple
+        # Terminal support only 256 colors. (But note that this detection does not
+        # work over SSH)
+        if _sys.platform == "darwin":
+            if _environ.get("TERM_PROGRAM", "") == "Apple_Terminal":
+                version = _environ.get("TERM_PROGRAM_VERSION", "")
+                version = version.split('.', 1)[0]
+                if version.isdigit() and int(version) < 460:
+                    colors = 256
+
+        _use_ansi_fallback(colors)
 
     _need_flush = False
 
@@ -739,7 +763,7 @@ def canPrintColor(file=_sys.stdout):
 def numColors(file=_sys.stdout):
     """ Number of colors we can print on this file.
 
-    this may return 1, 8, 16 or 256 """
+    common values are 8, 16 or 256, and 0x1000000. """
     if not _can_use(file):
         return 1
     return _colors(file)
